@@ -1,0 +1,6 @@
+[package]
+name = "myrpc4rs"
+version = "0.1.0"
+authors = ["leoppro <i@leop.pro>"]
+
+[dependencies]
