@@ -11,40 +11,49 @@ use std::io;
 use error::Result;
 use error::Error;
 use net::Server;
+use std::cell::RefCell;
+use common::Request;
+use std::rc::Rc;
+
 
 pub struct Processes {
-    function_map: HashMap<String, Box<FnMut(&Vec<Bytes>) -> Result<Bytes>>>
+    function_map: RefCell<HashMap<String, Box<FnMut(&Rc<BincodeSerializer>, &Vec<Vec<u8>>) -> Result<Vec<u8>>>>>,
+    serializer: Rc<BincodeSerializer>,
 }
 
 impl Processes {
-    pub fn new() -> Self {
+    pub fn new(serializer: Rc<BincodeSerializer>) -> Self {
         Self {
-            function_map: HashMap::new(),
+            function_map: RefCell::new(HashMap::new()),
+            serializer,
         }
     }
 
-    fn get_function(&mut self, name: &str) -> Option<&mut Box<FnMut(&Vec<Bytes>) -> Result<Bytes>>> {
-        self.function_map.get_mut(name)
+    pub fn insert_function<F: 'static>(&self, name: String, function: F)
+        where F: FnMut(&Rc<BincodeSerializer>, &Vec<Vec<u8>>) -> Result<Vec<u8>> {
+        self.function_map.borrow_mut().insert(name, Box::new(function));
     }
 
-    pub fn insert_function<F: 'static>(&mut self, name: String, function: F)
-        where F: FnMut(&Vec<Bytes>) -> Result<Bytes> {
-        self.function_map.insert(name, Box::new(function));
-    }
-
-    pub fn execute_function(&mut self, name: &str, params: &Vec<Bytes>) -> Result<Bytes> {
-        match self.get_function(name) {
-            Some(function) => function(params),
+    pub fn execute_function(&self, name: &str, params: &Vec<Vec<u8>>) -> Result<Vec<u8>> {
+        let mut function = self.function_map.borrow_mut();
+        let function = function.get_mut(name);
+        let result = match function {
+            Some(function) => function(&self.serializer, params),
             None => Err(Error::FunctionNotFound)
-        }
+        };
+        result
+    }
+
+    pub fn get_serializer(&self) -> &BincodeSerializer {
+        &self.serializer
     }
 }
 
 pub struct MyRPCServer {
     socket_addr: SocketAddr,
     serializer: BincodeSerializer,
-    processes: Processes,
-//    server:Server,
+    processes: Rc<Processes>,
+    server: Server,
 }
 
 impl MyRPCServer {
@@ -52,20 +61,36 @@ impl MyRPCServer {
         Self {
             socket_addr,
             serializer: BincodeSerializer::new(),
-            processes: Processes::new(),
+            processes: Rc::new(Processes::new(Rc::new(BincodeSerializer::new()))),
+            server: Server::new(socket_addr),
         }
     }
 
-    pub fn register_function<F: 'static>(&mut self, name: String, function: F)
-        where F: FnMut(&Vec<Bytes>) -> Result<Bytes> {
+    pub fn register_function<F: 'static>(&self, name: String, function: F)
+        where F: FnMut(&Rc<BincodeSerializer>, &Vec<Vec<u8>>) -> Result<Vec<u8>> {
         self.processes.insert_function(name, function);
     }
 
-    pub fn start_server(&mut self){
+    pub fn start_server(&mut self) {
+        self.server.start(self.processes.clone())
+    }
 
+    pub fn get_serializer(&self) -> &BincodeSerializer {
+        &self.serializer
     }
 }
 
+#[macro_export]
+macro_rules! myrpc_function {
+    ($myrpc_server:expr, $function_name:expr, $($param:ident<$t:ty>),+ , $myrpc_block:block) => {
+        $myrpc_server.register_function(String::from(stringify!($function_name)), |serializer, process| {
+            let mut i = 0;
+            $(let $param:$t = serializer.deserialize(&process[i]).unwrap();i+=1;)+
+            Ok(serializer.serialize(&$myrpc_block).unwrap())
+        });
+    }
+
+}
 
 #[cfg(test)]
 mod tests {
@@ -75,25 +100,34 @@ mod tests {
     use bytes::Bytes;
     use server::MyRPCServer;
     use std::borrow::BorrowMut;
+    use std::rc::Rc;
 
     #[test]
     fn process_test() {
-        let mut processse = Processes::new();
-        processse.insert_function(String::from("test"), |process| {
-            let param1: u32 = BincodeSerializer::new().deserialize(&process[0]).unwrap();
-            let param2: u32 = BincodeSerializer::new().deserialize(&process[1]).unwrap();
-            println!("{}", param1);
-            println!("{}", param2);
-            Ok(Bytes::from("123"))
+        let mut processse = Processes::new(Rc::new(BincodeSerializer::new()));
+        processse.insert_function(String::from("test"), |serializer, process| {
+            let param1: u32 = serializer.deserialize(&process[0]).unwrap();
+            let param2: u32 = serializer.deserialize(&process[1]).unwrap();
+            assert_eq!(1, param1);
+            assert_eq!(2, param2);
+            let a = serializer.serialize(&(param1+param2)).unwrap();
+            Ok(a)
         });
 
 
         let param1 = BincodeSerializer::new().serialize(&1).unwrap();
         let param2 = BincodeSerializer::new().serialize(&2).unwrap();
         let result = processse.execute_function("test", &vec![param1, param2]);
-        println!("{:?}", result);
+        assert_eq!(Ok(vec![1, 2, 3]), result)
     }
 
     #[test]
-    fn myrpcserver_test() {}
+    fn myrpcserver_test() {
+        let mut myrpc = MyRPCServer::new("127.0.0.1:8080".parse().unwrap());
+        myrpc_function!(myrpc,test1,param1<u32>,param2<u32>,{
+            println!("{},{}",param1,param2);
+            param1+param2
+        });
+        myrpc.start_server();
+    }
 }

@@ -12,7 +12,10 @@ extern crate bincode;
 mod net;
 mod common;
 mod serialization;
-mod server;
+
+#[macro_use]
+pub mod server;
+pub mod client;
 mod error;
 
 

@@ -9,12 +9,12 @@ type Error = Box<error::Error>;
 type Result<T> = ::std::result::Result<T, Error>;
 
 pub trait Serializer {
-    fn serialize<T: ?Sized>(&self, value: &T) -> Result<Bytes>
+    fn serialize<T: ?Sized>(&self, value: &T) -> Result<Vec<u8>>
         where T: Serialize;
-    fn deserialize<'a, T>(&self, bytes: &'a Bytes) -> Result<T>
+    fn deserialize<'a, T>(&self, bytes: &'a [u8]) -> Result<T>
         where T: Deserialize<'a>;
 }
-
+#[derive(Clone)]
 pub struct BincodeSerializer;
 
 impl BincodeSerializer {
@@ -24,14 +24,14 @@ impl BincodeSerializer {
 }
 
 impl Serializer for BincodeSerializer {
-    fn serialize<T: ?Sized>(&self, value: &T) -> Result<Bytes>
+    fn serialize<T: ?Sized>(&self, value: &T) -> Result<Vec<u8>>
         where T: Serialize {
-        Ok(Bytes::from(bincode_serialize(value)?))
+        Ok(Vec::from(bincode_serialize(value)?))
     }
 
-    fn deserialize<'a, T>(&self, bytes: &'a Bytes) -> Result<T>
+    fn deserialize<'a, T>(&self, bytes: &'a [u8]) -> Result<T>
         where T: Deserialize<'a>{
-        Ok(bincode_deserialize(&bytes[..])?)
+        Ok(bincode_deserialize(bytes)?)
     }
 
 }
