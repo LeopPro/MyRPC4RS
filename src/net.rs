@@ -11,7 +11,6 @@ use byteorder::{BigEndian, ReadBytesExt};
 use futures::future;
 use std::cell::RefCell;
 use server::Processes;
-use std::thread;
 use std::rc::Rc;
 use common::Request;
 use serialization::Serializer;
@@ -21,14 +20,11 @@ use futures::Poll;
 use bytes::BufMut;
 use tokio_io::AsyncRead;
 use tokio_io::AsyncWrite;
-use bytes::Buf;
 use bytes::IntoBuf;
-use std::borrow::Borrow;
 use serialization::BincodeSerializer;
 use std::sync::mpsc::Receiver;
 use std::sync::Arc;
 use std::collections::HashMap;
-use tokio_io::codec::BytesCodec;
 use byteorder::WriteBytesExt;
 use std::u32;
 
@@ -52,7 +48,7 @@ impl Server {
             let packages = ServerPackages::new(socket, Rc::clone(&processes));
 //            let pro = process_cell.borrow_mut();
             let package_handler = packages.into_future()
-                .then(|conn| {
+                .then(|_| {
                     future::ok(())
                 });
             handle.spawn(package_handler);
@@ -110,7 +106,6 @@ impl Stream for ServerPackages {
 //        let _ = self.poll_flush()?;
         loop {
             let sock_closed = self.fill_read_buf()?.is_ready();
-            println!("{:?}", self.read_buffer);
             if self.read_buffer.len() < 4 {
                 if sock_closed {
                     return Ok(Async::Ready(None));
@@ -138,7 +133,6 @@ impl Stream for ServerPackages {
                     }
                     Err(_) => { /*不应该发生*/panic!("should not happend") }
                 };
-                println!("{:?}", response);
                 let mut length = vec![];
                 length.write_u32::<BigEndian>(result.len() as u32).unwrap();
                 self.write(&length);
@@ -176,16 +170,11 @@ impl ServerPackages {
         let mut write_buffer = self.write_buffer.borrow_mut();
         write_buffer.reserve(line.len());
         write_buffer.put(line);
-        println!("ida:{:?}", thread::current().id());
     }
 
     fn poll_flush(&mut self) -> Poll<(), io::Error> {
         let mut write_buffer = self.write_buffer.borrow_mut();
-//        println!("{:?}", write_buffer);
-
-        println!("idb:{:?}", thread::current().id());
         while !write_buffer.is_empty() {
-            println!("abccc");
             let n = try_ready!(self.socket.write_buf(&mut (&*write_buffer).into_buf()));
             let _ = write_buffer.split_to(n);
         }
@@ -227,7 +216,7 @@ impl Stream for ClientPackages {
             self.stoping = true;
             return Ok(Async::NotReady);
         }
-        if self.stoping && self.request_map.len()==0 {
+        if self.stoping && self.request_map.len() == 0 {
             return Ok(Async::Ready(None));
         }
         let sock_closed = self.fill_read_buf()?.is_ready();
@@ -301,10 +290,11 @@ impl ClientPackages {
             Err(_) => { panic!("deserialize fail"); }
         };
         if response.id == u32::MAX {
+            println!("ERR:服务器反序列化失败");
             return;
         }
         {
-            let (request, callback) = self.request_map.get_mut(&response.id).unwrap();
+            let (_request, callback) = self.request_map.get_mut(&response.id).unwrap();
             callback(serializer, &response);
         }
         self.request_map.remove(&response.id);
@@ -316,14 +306,13 @@ impl ClientPackages {
                 if result.0.id == u32::MAX && &result.0.name == "stop" {
                     return None;
                 }
-                println!("{:?}", result.0);
                 let bytes = self.serializer.serialize(&result.0).unwrap();
                 self.request_map.insert(result.0.id, result);
                 let mut length = vec![];
                 length.write_u32::<BigEndian>(bytes.len() as u32).unwrap();
                 self.write(&length);
                 self.write(&bytes);
-                self.poll_flush();
+                self.poll_flush().unwrap();
             } else {
                 return Some(());
             }
@@ -356,14 +345,15 @@ mod tests {
     use std::sync::mpsc::Sender;
     use common::Response;
     use std::sync::Arc;
-    use std::sync::mpsc::SendError;
     use std::u32;
+    use std::time::Duration;
 
-    #[test]
+    //    #[test]
+    #[allow(dead_code)]
     fn start_server() {
         let addr = "127.0.0.1:8080".parse().unwrap();
         let mut server = Server::new(addr);
-        let mut processes = Processes::new(Rc::new(BincodeSerializer::new()));
+        let processes = Processes::new(Rc::new(BincodeSerializer::new()));
         processes.insert_function(String::from("print"), |serializer, params| {
             let mut param1: u32 = serializer.deserialize(&params[0]).unwrap();
             param1 += 666;
@@ -373,7 +363,8 @@ mod tests {
         server.start(Rc::new(processes));
     }
 
-    #[test]
+//    #[test]
+    #[allow(dead_code)]
     fn client() {
         let request = Request {
             id: 1,
@@ -381,38 +372,30 @@ mod tests {
             params: vec![BincodeSerializer::new().serialize(&123).unwrap(),
                          BincodeSerializer::new().serialize(&456).unwrap()],
         };
-        let mut send = BincodeSerializer::new().serialize(&request).unwrap();
+        let send = BincodeSerializer::new().serialize(&request).unwrap();
 
         let mut wtr = vec![];
         wtr.write_u32::<BigEndian>(send.len() as u32).unwrap();
         println!("{:?}", wtr);
-        let mut buf = vec![0u8; 1024];
         let addr: SocketAddr = "127.0.0.1:8080".parse().unwrap();
         let mut stream = TcpStream::connect(&addr).unwrap();
         loop {
-            // 对比Listener，TcpStream就简单很多了
-            // 本次模拟的是tcp短链接的过程，可以看作是一个典型的HTTP交互的基础IO模拟
-            // 当然，这个通讯里面并没有HTTP协议 XD！
             let msg = wtr.as_ref();
-            // 避免发送数据太快而刷屏
-            thread::sleep_ms(100);
-            let rcount = stream.write(&msg).unwrap();
-            thread::sleep_ms(1000);
+            thread::sleep(Duration::from_secs(1));
+            let _ = stream.write(&msg).unwrap();
+            thread::sleep(Duration::from_secs(1));
             let msg = send.as_ref();
-            let rcount = stream.write(&msg).unwrap();
-//            let mut re = Vec::new();
-            thread::sleep_ms(100);
-//            stream.r
-
+            let _ = stream.write(&msg).unwrap();
+            thread::sleep(Duration::from_secs(1));
             let mut buffer = [0; 10];
 
-            // read up to 10 bytes
             stream.read(&mut buffer).unwrap();
             println!("{:?}", buffer);
         }
     }
 
-    #[test]
+    //    #[test]
+    #[allow(dead_code)]
     fn client_test() {
         let channel = mpsc::channel();
         let sender: Sender<(Request, Box<FnMut(&Rc<BincodeSerializer>, &Response) + Send>)> = channel.0;
@@ -423,14 +406,14 @@ mod tests {
             params: vec![BincodeSerializer::new().serialize(&123).unwrap(),
                          BincodeSerializer::new().serialize(&456).unwrap()],
         };
-        let callback = |a: &Rc<BincodeSerializer>, b: &Response| { println!("{:?}", b) };
+        let callback = |_: &Rc<BincodeSerializer>, r: &Response| { println!("{:?}", r) };
         let handler = thread::spawn(move || {
             let addr = "127.0.0.1:8080".parse().unwrap();
             let client = Client::new(addr, Rc::new(BincodeSerializer::new()));
             client.start(&Arc::new(receiver));
         });
         sender.send((req, Box::new(callback))).unwrap();
-        thread::sleep_ms(2000);
+        thread::sleep(Duration::from_secs(1));
 
         let req = Request {
             id: u32::MAX,
@@ -439,6 +422,6 @@ mod tests {
                          BincodeSerializer::new().serialize(&456).unwrap()],
         };
         sender.send((req, Box::new(callback))).unwrap();
-        handler.join();
+        handler.join().unwrap();
     }
 }

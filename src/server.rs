@@ -1,18 +1,10 @@
 use std::net::SocketAddr;
-use serialization::Serializer;
 use serialization::BincodeSerializer;
 use std::collections::HashMap;
-use bytes::Bytes;
-use std::error;
-use serde::Serialize;
-use serde::Deserialize;
-use bincode::deserialize;
-use std::io;
 use error::Result;
 use error::Error;
 use net::Server;
 use std::cell::RefCell;
-use common::Request;
 use std::rc::Rc;
 
 
@@ -50,7 +42,6 @@ impl Processes {
 }
 
 pub struct MyRPCServer {
-    socket_addr: SocketAddr,
     serializer: BincodeSerializer,
     processes: Rc<Processes>,
     server: Server,
@@ -59,7 +50,6 @@ pub struct MyRPCServer {
 impl MyRPCServer {
     pub fn new(socket_addr: SocketAddr) -> Self {
         Self {
-            socket_addr,
             serializer: BincodeSerializer::new(),
             processes: Rc::new(Processes::new(Rc::new(BincodeSerializer::new()))),
             server: Server::new(socket_addr),
@@ -84,8 +74,8 @@ impl MyRPCServer {
 macro_rules! myrpc_function {
     ($myrpc_server:expr, $function_name:expr, $($param:ident<$t:ty>),+ , $myrpc_block:block) => {
         $myrpc_server.register_function(String::from(stringify!($function_name)), |serializer, process| {
-            let mut i = 0;
-            $(let $param:$t = serializer.deserialize(&process[i]).unwrap();i+=1;)+
+            let mut _i = 0;
+            $(let $param:$t = serializer.deserialize(&process[_i]).unwrap();_i+=1;)+
             Ok(serializer.serialize(&$myrpc_block).unwrap())
         });
     }
@@ -97,14 +87,12 @@ mod tests {
     use server::Processes;
     use serialization::Serializer;
     use serialization::BincodeSerializer;
-    use bytes::Bytes;
     use server::MyRPCServer;
-    use std::borrow::BorrowMut;
     use std::rc::Rc;
 
     #[test]
     fn process_test() {
-        let mut processse = Processes::new(Rc::new(BincodeSerializer::new()));
+        let processse = Processes::new(Rc::new(BincodeSerializer::new()));
         processse.insert_function(String::from("test"), |serializer, process| {
             let param1: u32 = serializer.deserialize(&process[0]).unwrap();
             let param2: u32 = serializer.deserialize(&process[1]).unwrap();
