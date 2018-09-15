@@ -11,12 +11,12 @@ extern crate bincode;
 
 mod net;
 mod common;
-mod serialization;
+pub mod serialization;
 
 #[macro_use]
 pub mod server;
 pub mod client;
-mod error;
+pub mod error;
 
 
 #[cfg(test)]

@@ -18,7 +18,7 @@
 
 - [x] 09.09 立项，设计总体架构，熟悉tokio及futrue框架   
 - [x] 09.10 完成rpc远程调用  
-- [ ] 09.11 设计rpc框架用户接口  
+- [x] 09.11 设计rpc框架用户接口  
 - [ ] 09.12 实现路径规划算法  
 - [ ] 09.13 冗余时间  
 - [ ] 09.14 冗余时间  
@@ -44,6 +44,65 @@
 
 ## 用例
 
+### 服务端
+
+```rust
+#[macro_use]
+extern crate myrpc4rs;
+
+use myrpc4rs::server::MyRPCServer;
+use myrpc4rs::serialization::Serializer;
+
+fn main(){
+    let mut myrpc = MyRPCServer::new("127.0.0.1:8080".parse().unwrap());
+    // 使用myrpc_function宏注册RPC函数
+    // myrpc_function!(myrpc_server:expr, $function_name:expr, $($param:ident<$t:ty>),+ , $myrpc_block:block)
+    // myrpc_server: MyRPCServer 结构
+    // function_name: RPC函数名
+    // param<t>: 参数名<参数类型>
+    // myrpc_block： RPC函数代码块
+    myrpc_function!(myrpc,test1,param1<u32>,param2<u32>,{
+        println!("{},{}",param1,param2);
+        String::from(format!("hello world!a+b={}",param1+param2))
+    });
+    myrpc.start_server();
+}
+```
+
+### 客户端
+
+```rust
+#[macro_use]
+extern crate myrpc4rs;
+
+use myrpc4rs::serialization::Serializer;
+use myrpc4rs::client::MyRPCClient;
+use myrpc4rs::error::Error;
+
+fn main(){
+    let mut client = MyRPCClient::new("127.0.0.1:8080".parse().unwrap());
+    // 使用myrpc_call_async进行异步的RPC请求
+    // myrpc_call_async!($myrpc_client:expr, $function_name:expr, $($param:expr),+ ; $response:ident<$t:ty> $myrpc_block:block)
+    // myrpc_client: MyRPCClient 结构
+    // function_name: RPC函数名
+    // param: 参数，需要传递引用
+    // response<t>: 返回值名<返回值类型>
+    // myrpc_block: 回调代码块
+    myrpc_call_async!(client,test1,&8,&4;aa <String>{
+            println!("{:?}",aa);
+    });
+    
+    // 使用myrpc_call_sync进行同步的RPC请求
+    // myrpc_call_sync!($myrpc_client:expr, $function_name:expr, $($param:expr),+ ;<$t:ty>)
+    // myrpc_client: MyRPCClient 结构
+    // function_name: RPC函数名
+    // param: 参数，需要传递引用
+    // <t>: <返回值类型>
+    // return 返回值
+    let resp = myrpc_call_sync!(client,test1,&16,&24;<String>);
+    println!("{:?}", resp);
+}
+```
 ## 遇到的问题
 
 ### 1. 构造通用类型
@@ -65,3 +124,6 @@
 
 ### 3. 对超时情况处理不佳
 
+主要是客户端对服务器相应超时的情况处理不好，目前没有超时机制，服务器无响应但连接未断开时客户端会一直等待服务器响应。
+
+解决方案：对每一个请求记录一个请求时间，在事件循环中检查每一个等待响应的请求是否超时，如果超时则触发超时事件。

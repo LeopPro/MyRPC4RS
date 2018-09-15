@@ -124,9 +124,6 @@ mod tests {
     #[test]
     fn client_test() {
         let mut client = MyRPCClient::new("127.0.0.1:8080".parse().unwrap());
-//        let param1 = client.get_serializer().serialize(&1).unwrap();
-//        let param2 = client.get_serializer().serialize(&2).unwrap();
-//        let a = client.call(String::from("test1"), vec![param1, param2]).sync();
         myrpc_call_async!(client,test1,&8,&4;aa <u32>{
             println!("{:?}",aa);
         });
